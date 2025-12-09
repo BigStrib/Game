@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Horizontal Hunt: The Lure</title>
+    <style>
+        :root {
+            --player-color: #00A6FF;
+            --enemy-color: #FF6B6B;
+            --flying-color: #00FF99;
+            --bullet-color: #FFF200;
+            --game-height: 500px;
+            
+            /* Dynamic Variables for Luring Effect (Initial State) */
+            --current-scale: 1.0; 
+            --current-brightness: 100%;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            /* Initial White Background */
+            background-color: white; 
+            overflow: hidden;
+            font-family: 'Consolas', monospace;
+            color: #000;
+            transition: background-color 1s; /* Smooth body transition */
+        }
+
+        #game-container {
+            position: relative;
+            width: 90%;
+            max-width: 1000px;
+            height: var(--game-height);
+            background-color: #333; /* Darker interior game area */
+            border: 2px solid #000;
+            overflow: hidden;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+
+            /* --- Key Luring Transitions: Scales DOWN and Dims --- */
+            transition: transform 1s linear, filter 1s linear;
+            transform: scale(var(--current-scale));
+            filter: brightness(var(--current-brightness));
+        }
+
+        #ground {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 50px;
+            background-color: #222;
+            border-top: 5px solid #000;
+        }
+
+        /* Player Styling */
+        #player {
+            position: absolute;
+            width: 40px;
+            height: 60px;
+            bottom: 50px; 
+            background-color: var(--player-color);
+            box-shadow: 0 0 10px var(--player-color);
+            /* Shrinking via transform */
+            transform: scale(var(--current-scale)); 
+            transform-origin: bottom left; 
+            transition: left 0.05s linear, bottom 0.2s ease-out, transform 1s linear;
+            z-index: 10;
+        }
+
+        /* Character flash on collision */
+        .flash {
+            background-color: white !important;
+            box-shadow: 0 0 20px white !important;
+            opacity: 0.5;
+        }
+
+        /* Enemy Styling (Ground) */
+        .enemy {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            bottom: 50px;
+            background-color: var(--enemy-color);
+            border-radius: 5px;
+            box-shadow: 0 0 10px var(--enemy-color);
+             /* Shrinking via transform */
+            transform: scale(var(--current-scale)); 
+            transform-origin: bottom center;
+            transition: transform 1s linear;
+            z-index: 5;
+        }
+        
+        /* New Flying Enemy Styling */
+        .flyer {
+            position: absolute;
+            width: 25px;
+            height: 25px;
+            background-color: var(--flying-color);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--flying-color);
+            transform: scale(var(--current-scale)); 
+            transition: transform 1s linear;
+            z-index: 7; /* Above ground enemies */
+        }
+
+        /* Projectile/Bullet Styling */
+        .bullet {
+            position: absolute;
+            width: 12px;
+            height: 3px;
+            background-color: var(--bullet-color);
+            box-shadow: 0 0 5px var(--bullet-color);
+            /* Bullets shrink too */
+            transform: scale(var(--current-scale)); 
+            z-index: 8;
+        }
+
+        /* Score Display */
+        #score {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 1.2em;
+            z-index: 20;
+            color: var(--bullet-color);
+            text-shadow: 0 0 5px rgba(255, 255, 0, 0.7);
+        }
+
+        /* --- JUMP SCARE VIDEO MODAL --- */
+        #scare-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: black;
+            opacity: 0;
+            display: none;
+            z-index: 100;
+            transition: opacity 0.05s ease-in; 
+        }
+
+        #scare-video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .show-scare {
+            display: block !important;
+            opacity: 1 !important;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="ground"></div> 
+        <div id="player"></div>
+        <div id="score">Enemies Shot: 0</div>
+    </div>
+
+    <div id="scare-modal">
+        <video id="scare-video" autoplay playsinline>
+            <source src="https://cdn.vlipsy.com/clips/3hEsFXt9/360p-watermark.mp4?token=v1_f_1765380148_ZZ-1iV0Tj" type="video/mp4">
+            Your browser does not support the video tag.
+        </video>
+    </div>
+
+    <script>
+        const gameContainer = document.getElementById('game-container');
+        const player = document.getElementById('player');
+        const scoreDisplay = document.getElementById('score');
+        const scareModal = document.getElementById('scare-modal');
+        const scareVideo = document.getElementById('scare-video');
+        
+        const GAME_WIDTH = 1000; 
+        const PLAYER_WIDTH = 40;
+        const PLAYER_HEIGHT = 60;
+        const GROUND_LEVEL = 50; 
+        const FLY_LEVEL_MIN = 150; 
+        const FLY_LEVEL_MAX = 350; 
+        
+        const LURE_DURATION = 60000; // 60 seconds for the shrinking/darkening
+        const SCARE_TRIGGER_PROGRESS = 0.99; // Trigger at 99% of the lure time
+
+        // Lure Constants (Scaling Down)
+        const MAX_BRIGHTNESS = 100;
+        const MIN_BRIGHTNESS = 0;
+        const MAX_SCALE = 1.0;
+        const MIN_SCALE = 0.25; 
+
+        // Player state
+        let score = 0;
+        let playerX = 50;
+        let playerY = GROUND_LEVEL; 
+        let enemies = [];
+        let bullets = [];
+        let keys = {};
+        let lastShotTime = 0;
+        const SHOT_COOLDOWN = 200; 
+
+        // Jump physics variables
+        let isJumping = false;
+        let velocityY = 0;
+        const GRAVITY = 1.5;
+        const JUMP_POWER = 35; 
+
+        // --- Initialization ---
+        function initGame() {
+            player.style.left = `${playerX}px`;
+            player.style.bottom = `${playerY}px`;
+
+            window.addEventListener('keydown', (e) => {
+                keys[e.key] = true;
+                
+                const currentTime = Date.now();
+                
+                // Shooting (Spacebar)
+                if (e.key === ' ' && (currentTime - lastShotTime > SHOT_COOLDOWN)) {
+                    shoot();
+                    lastShotTime = currentTime;
+                }
+
+                // Jumping (Up Arrow)
+                if (e.key === 'ArrowUp' && !isJumping) {
+                    isJumping = true;
+                    velocityY = JUMP_POWER;
+                }
+            });
+            window.addEventListener('keyup', (e) => {
+                keys[e.key] = false;
+            });
+
+            setInterval(updateGame, 20); 
+            setInterval(spawnEnemy, 1500); 
+            setInterval(spawnFlyer, 2500); 
+            startLureTimer();
+        }
+
+        // --- Player Movement (Horizontal and Jump) ---
+        function updatePlayer() {
+            const speed = 7;
+            
+            if (keys['a'] || keys['A'] || keys['ArrowLeft']) playerX -= speed;
+            if (keys['d'] || keys['D'] || keys['ArrowRight']) playerX += speed;
+
+            playerX = Math.max(0, Math.min(GAME_WIDTH - PLAYER_WIDTH, playerX));
+
+            // Jump Physics Update
+            if (isJumping) {
+                playerY += velocityY;
+                velocityY -= GRAVITY; 
+
+                if (playerY <= GROUND_LEVEL) {
+                    playerY = GROUND_LEVEL;
+                    isJumping = false;
+                    velocityY = 0;
+                }
+            }
+
+            player.style.left = `${playerX}px`;
+            player.style.bottom = `${playerY}px`;
+            
+            checkPlayerCollision();
+        }
+
+        // --- Player Collision Check (Triggers Flash) ---
+        function checkPlayerCollision() {
+            const pX = playerX;
+            const pY = playerY;
+            const pW = PLAYER_WIDTH;
+            const pH = PLAYER_HEIGHT;
+            
+            const playerBottom = pY;
+            const playerTop = pY + pH;
+            
+            for (let i = 0; i < enemies.length; i++) {
+                const enemy = enemies[i];
+                
+                const eX = enemy.x;
+                const eY = enemy.y;
+                const eSize = enemy.size; 
+                
+                const enemyBottom = eY;
+                const enemyTop = eY + eSize;
+
+                // AABB Collision Check
+                const x_overlap = pX < eX + eSize && pX + pW > eX;
+                const y_overlap = playerBottom < enemyTop && playerTop > enemyBottom;
+
+                if (x_overlap && y_overlap) {
+                    // Collision detected! Flash the player
+                    player.classList.add('flash');
+                    setTimeout(() => player.classList.remove('flash'), 100);
+                }
+            }
+        }
+
+        function shoot() {
+            const bullet = document.createElement('div');
+            bullet.classList.add('bullet');
+            
+            let bulletX = playerX + PLAYER_WIDTH; 
+            let bulletY = playerY + (PLAYER_HEIGHT / 2) - 1.5; 
+
+            bullet.style.left = `${bulletX}px`;
+            bullet.style.bottom = `${bulletY}px`;
+            gameContainer.appendChild(bullet);
+
+            bullets.push({
+                element: bullet,
+                x: bulletX,
+                y: bulletY,
+                vx: 15,
+                width: 12,
+                height: 3
+            });
+        }
+
+        // --- Enemy Logic (Ground) ---
+        function spawnEnemy() {
+            const enemySize = 30;
+            let x = GAME_WIDTH; 
+
+            const enemy = document.createElement('div');
+            enemy.classList.add('enemy');
+            enemy.style.left = `${x}px`;
+            gameContainer.appendChild(enemy);
+
+            enemies.push({
+                element: enemy,
+                type: 'ground',
+                x: x,
+                y: GROUND_LEVEL,
+                size: enemySize,
+                speed: 1 + Math.random() * 2.5 
+            });
+        }
+        
+        // --- FLYER LOGIC (Air) ---
+        function spawnFlyer() {
+            const flyerSize = 25;
+            let x = GAME_WIDTH;
+            let y = Math.random() * (FLY_LEVEL_MAX - FLY_LEVEL_MIN) + FLY_LEVEL_MIN; 
+
+            const flyer = document.createElement('div');
+            flyer.classList.add('flyer');
+            flyer.style.left = `${x}px`;
+            flyer.style.bottom = `${y}px`;
+            gameContainer.appendChild(flyer);
+
+            enemies.push({
+                element: flyer,
+                type: 'air',
+                x: x,
+                y: y,
+                size: flyerSize,
+                speed: 1.5 + Math.random() * 2 
+            });
+        }
+
+
+        function updateEnemies() {
+            enemies = enemies.filter(enemy => {
+                enemy.x -= enemy.speed;
+                enemy.element.style.left = `${enemy.x}px`;
+
+                if (enemy.x < -50) {
+                    enemy.element.remove();
+                    return false;
+                }
+                return true;
+            });
+        }
+
+        // --- Bullet and Collision Logic ---
+        function updateBullets() {
+            bullets = bullets.filter(bullet => {
+                bullet.x += bullet.vx;
+                bullet.element.style.left = `${bullet.x}px`;
+
+                if (bullet.x > GAME_WIDTH) {
+                    bullet.element.remove();
+                    return false;
+                }
+
+                // Check collision with enemies
+                for (let i = 0; i < enemies.length; i++) {
+                    const enemy = enemies[i];
+                    
+                    const enemyHeight = enemy.size; 
+                    const enemyBottom = enemy.y; 
+                    const enemyTop = enemyBottom + enemyHeight; 
+                    const bulletTop = bullet.y + bullet.height;
+                    
+                    const x_overlap = bullet.x < enemy.x + enemyHeight && bullet.x + bullet.width > enemy.x;
+                    const y_overlap = bullet.y < enemyTop && bulletTop > enemyBottom;
+
+                    if (x_overlap && y_overlap) {
+                        bullet.element.remove();
+                        enemy.element.remove();
+                        enemies.splice(i, 1);
+                        score++;
+                        scoreDisplay.textContent = `Enemies Shot: ${score}`;
+                        return false; 
+                    }
+                }
+
+                return true; 
+            });
+        }
+
+        // --- LURE TIMER: 60s Dim/Shrink (TRIGGER ON NEAR-COMPLETION) ---
+        function startLureTimer() {
+            const startTime = Date.now();
+
+            const lureInterval = setInterval(() => {
+                const elapsed = Date.now() - startTime;
+                
+                let progress = Math.min(elapsed / LURE_DURATION, 1); 
+
+                if (progress < SCARE_TRIGGER_PROGRESS) {
+                    // --- PHASE 1: SHRINKING AND DIMMING ---
+                    
+                    const bodyBrightness = 100 - (progress * 100);
+                    document.body.style.backgroundColor = `hsl(0, 0%, ${bodyBrightness}%)`;
+                    
+                    const containerBrightness = MAX_BRIGHTNESS - (progress * (MAX_BRIGHTNESS - MIN_BRIGHTNESS));
+                    document.documentElement.style.setProperty('--current-brightness', `${containerBrightness}%`);
+                    
+                    const currentScale = MAX_SCALE - (progress * (MAX_SCALE - MIN_SCALE));
+                    document.documentElement.style.setProperty('--current-scale', currentScale);
+                    
+                } else {
+                    // --- PHASE 2: INSTANT JUMP SCARE (Triggered at 99%) ---
+                    clearInterval(lureInterval); 
+
+                    // Lock final state (or nearly final state) for consistency
+                    document.documentElement.style.setProperty('--current-brightness', `${MIN_BRIGHTNESS}%`);
+                    document.documentElement.style.setProperty('--current-scale', MIN_SCALE);
+                    document.body.style.backgroundColor = `hsl(0, 0%, 0%)`; 
+
+                    triggerJumpScare(); 
+                }
+            }, 100); 
+        }
+
+        function triggerJumpScare() {
+            // Triggered slightly before the screen hits 100% black (at 59.4 seconds)
+            gameContainer.style.filter = 'blur(5px) grayscale(100%)';
+            gameContainer.style.display = 'none';
+            
+            scareModal.classList.add('show-scare');
+            scareVideo.play().catch(e => console.error("Video playback failed:", e)); 
+        }
+
+        // --- Main Game Loop ---
+        function updateGame() {
+            updatePlayer();
+            updateBullets();
+            updateEnemies();
+        }
+
+        // --- Start the game on load ---
+        document.addEventListener('DOMContentLoaded', initGame);
+    </script>
+</body>
+</html>
